@@ -1,0 +1,188 @@
+import productModel from "../models/productModel.js";
+import userModel from "../models/userModel.js";
+
+const assertSameUser = (req, userId) => {
+  const authUserId = req.userId;
+  if (!authUserId) return false;
+  // Admins could be allowed, but cart routes are user-scoped; keep strict by default.
+  return String(authUserId) === String(userId);
+};
+
+const addToCart = async (req, res) => {
+  console.log(req.body)
+  try {
+    const { userId, productId, quantity } = req.body;
+
+    // IMPORTANT: Prevent IDOR — never trust userId from client
+    const effectiveUserId = req.userId;
+    if (!effectiveUserId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (userId && !assertSameUser(req, userId)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    if (!productId || !quantity) {
+      return res.status(400).json({ success: false, message: "Missing fields" });
+    }
+
+    const product = await productModel.findById(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    const user = await userModel.findById(effectiveUserId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const existingQuantity = user.cartData[productId] || 0;
+    user.cartData[productId] = existingQuantity + quantity;
+
+    console.log("Cart data after:", user.cartData);
+
+    user.markModified('cartData');
+
+    await user.save();
+
+    res.status(200).json({ success: true, message: "Item added to cart", cartData: user.cartData });
+
+  } catch (error) {
+    console.log("Error while adding to cart: ", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const getCartDetails = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "User ID is required" });
+    }
+    if (!assertSameUser(req, userId)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    const user = await userModel.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    const cartData = user.cartData;
+
+    // Get product IDs from cartData keys
+    const productIds = Object.keys(cartData);
+    const products = await productModel.find({ _id: { $in: productIds } });
+
+    // Map product details with quantity
+    const cartDetails = products.map((product) => ({
+      product: product.toObject(),  // convert Mongoose doc to plain JS obj
+      quantity: cartData[product._id.toString()] || 0,
+    }));
+
+    res.status(200).json({ success: true, cart: cartDetails });
+  } catch (error) {
+    console.error("Error getting cart details:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const removeFromCart = async (req, res) => {
+  try {
+    const { userId, productId } = req.body;
+
+    // IMPORTANT: Prevent IDOR — never trust userId from client
+    const effectiveUserId = req.userId;
+    if (!effectiveUserId) {
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+    if (userId && !assertSameUser(req, userId)) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    if (!productId) {
+      return res.status(400).json({ success: false, message: "Missing fields" });
+    }
+
+    const product = await productModel.findById(productId);
+    if (!product) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+
+    const user = await userModel.findById(effectiveUserId);
+    console.log(user)
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    if (user.cartData && user.cartData[productId]) {
+      delete user.cartData[productId]; // Remove from cart
+      user.markModified('cartData');   // Let Mongoose know we modified a mixed type
+      await user.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "Product removed from cart",
+        cartData: user.cartData,
+      });
+    } else {
+      return res.status(404).json({
+        success: false,
+        message: "Product not found in cart",
+      });
+    }
+
+  } catch (error) {
+    console.error("Error Removing cart details:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+
+// INFO: Route for clearing entire cart (admin use)
+const clearUserCart = async (req, res) => {
+  try {
+    console.log("Clear cart request body:", req.body);
+    const { userId } = req.body;
+
+    if (!userId) {
+      console.log("User ID missing in request");
+      return res.status(400).json({ success: false, message: "User ID is required" });
+    }
+
+    console.log("Looking for user with ID:", userId);
+    const user = await userModel.findById(userId);
+    
+    if (!user) {
+      console.log("User not found with ID:", userId);
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    console.log("User found, clearing cart. Previous cart:", user.cartData);
+    
+    // Clear the entire cart
+    user.cartData = {};
+    user.markModified('cartData');
+    await user.save();
+
+    console.log("Cart cleared successfully for user:", user.email);
+
+    return res.status(200).json({
+      success: true,
+      message: "User cart cleared successfully",
+      cartData: user.cartData,
+    });
+
+  } catch (error) {
+    console.error("Error clearing user cart:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: error.message || "Internal server error while clearing cart" 
+    });
+  }
+};
+
+export {
+  addToCart, getCartDetails, removeFromCart, clearUserCart
+};
