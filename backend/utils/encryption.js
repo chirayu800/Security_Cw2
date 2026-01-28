@@ -8,11 +8,11 @@
 
 // // Encryption algorithm
 // const ALGORITHM = 'aes-256-gcm';
-// const IV_LENGTH = 16; 
-// const SALT_LENGTH = 64; 
-// const TAG_LENGTH = 16; 
-// const KEY_LENGTH = 32; 
-// const ITERATIONS = 100000; 
+// const IV_LENGTH = 16;
+// const SALT_LENGTH = 64;
+// const TAG_LENGTH = 16;
+// const KEY_LENGTH = 32;
+// const ITERATIONS = 100000;
 
 // /**
 //  * Get encryption key from environment variable
@@ -21,7 +21,7 @@
 // const getEncryptionKey = () => {
 //   const key = process.env.ENCRYPTION_KEY;
 //   const isProd = process.env.NODE_ENV === 'production';
-  
+
 //   if (!key) {
 //     if (isProd) {
 //       throw new Error('ENCRYPTION_KEY is required in production');
@@ -30,11 +30,11 @@
 //     // Default key for development only - MUST be changed in production
 //     return 'default-encryption-key-change-in-production-32-chars!!';
 //   }
-  
+
 //   if (key.length < 32) {
 //     throw new Error('ENCRYPTION_KEY must be at least 32 characters long');
 //   }
-  
+
 //   return key;
 // };
 
@@ -60,29 +60,29 @@
 
 //   try {
 //     const masterKey = getEncryptionKey();
-    
+
 //     // If using default key (not secure), log warning but continue
 //     if (masterKey === 'default-encryption-key-change-in-production-32-chars!!') {
 //       console.warn('⚠️  Using default encryption key - encryption may not work correctly!');
 //     }
-    
+
 //     // Generate random salt and IV
 //     const salt = crypto.randomBytes(SALT_LENGTH);
 //     const iv = crypto.randomBytes(IV_LENGTH);
-    
+
 //     // Derive key from master key using salt
 //     const key = deriveKey(masterKey, salt);
-    
+
 //     // Create cipher
 //     const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-    
+
 //     // Encrypt the text
 //     let encrypted = cipher.update(text, 'utf8', 'base64');
 //     encrypted += cipher.final('base64');
-    
+
 //     // Get authentication tag
 //     const tag = cipher.getAuthTag();
-    
+
 //     // Combine salt:iv:tag:encryptedData (all base64 encoded)
 //     const result = [
 //       salt.toString('base64'),
@@ -90,7 +90,7 @@
 //       tag.toString('base64'),
 //       encrypted
 //     ].join(':');
-    
+
 //     return result;
 //   } catch (error) {
 //     console.error('Encryption error:', error);
@@ -122,34 +122,34 @@
 
 //   try {
 //     const masterKey = getEncryptionKey();
-    
+
 //     // Split the encrypted data
 //     const parts = encryptedData.split(':');
-    
+
 //     if (parts.length !== 4) {
 //       // Invalid format, might be plain text
 //       console.warn('Invalid encryption format, treating as plain text');
 //       return encryptedData;
 //     }
-    
+
 //     const [saltBase64, ivBase64, tagBase64, encrypted] = parts;
-    
+
 //     // Decode from base64
 //     const salt = Buffer.from(saltBase64, 'base64');
 //     const iv = Buffer.from(ivBase64, 'base64');
 //     const tag = Buffer.from(tagBase64, 'base64');
-    
+
 //     // Derive key from master key using salt
 //     const key = deriveKey(masterKey, salt);
-    
+
 //     // Create decipher
 //     const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
 //     decipher.setAuthTag(tag);
-    
+
 //     // Decrypt the text
 //     let decrypted = decipher.update(encrypted, 'base64', 'utf8');
 //     decrypted += decipher.final('utf8');
-    
+
 //     return decrypted;
 //   } catch (error) {
 //     console.error('Decryption error:', error);
