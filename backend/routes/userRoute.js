@@ -16,13 +16,14 @@ import {
 import adminAuth from "../middleware/adminAuth.js";
 import userAuth from "../middleware/userAuth.js";
 import roleAuth from "../middleware/roleAuth.js";
+import { protectLogin } from "../middleware/bruteForceProtection.js";
 
 const userRouter = express.Router();
 
 // Public routes
 userRouter.post("/register", registerUser);
-userRouter.post("/login", loginUser);
-userRouter.post("/admin", loginAdmin);
+userRouter.post("/login", protectLogin("user"), loginUser);
+userRouter.post("/admin", protectLogin("admin"), loginAdmin);
 userRouter.post("/forgot-password", forgotPassword);
 userRouter.post("/reset-password", resetPassword);
 

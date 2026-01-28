@@ -2,9 +2,15 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import validator from "validator";
 import { ACCESS_TOKEN_COOKIE, CSRF_COOKIE, randomToken, sha256Hex } from "../utils/cookies.js";
+import {
+  computePasswordExpiryDate,
+  isPasswordReused,
+  validatePasswordComplexity,
+} from "../utils/passwordPolicy.js";
 import userModel from "../models/userModel.js";
 import adminSettingsModel from "../models/adminSettingsModel.js";
 import { logAuthEvent } from "../utils/auditLogger.js";
+import { recordLoginResult } from "../middleware/bruteForceProtection.js";
 
 // INFO: Function to create token with role
 const createToken = (payload) => {
@@ -26,14 +32,14 @@ const cookieOptions = (req) => {
 
 const setAuthCookies = (req, res, accessToken) => {
   const opts = cookieOptions(req);
-  // 1 hour session cookie expiry (matches JWT expiry)
+
   res.cookie(ACCESS_TOKEN_COOKIE, accessToken, { ...opts, maxAge: 60 * 60 * 1000 });
 
-  // CSRF token for cookie-authenticated requests (double submit cookie)
+
   const csrf = randomToken(16);
   res.cookie(CSRF_COOKIE, csrf, {
     ...opts,
-    httpOnly: false, // MUST be readable by frontend JS to set header
+    httpOnly: false,
     maxAge: 60 * 60 * 1000,
   });
 };
@@ -52,9 +58,9 @@ const loginUser = async (req, res) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email and password are required" 
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required"
       });
     }
 
@@ -89,22 +95,38 @@ const loginUser = async (req, res) => {
         .json({ success: false, message: "Invalid email or password" });
     }
 
+    // Password expiry policy
+    if (user.passwordExpiresAt && user.passwordExpiresAt instanceof Date && user.passwordExpiresAt < new Date()) {
+      await logAuthEvent(
+        "PASSWORD_EXPIRED",
+        `Password expired for: ${email}`,
+        req,
+        { email: normalizedEmail },
+        "FAILURE"
+      );
+      await recordLoginResult(req, { success: false, eventEmail: normalizedEmail });
+      return res.status(403).json({
+        success: false,
+        message: "Password expired. Please reset your password.",
+      });
+    }
+
     // Verify password exists
     if (!user.password) {
       console.error("ERROR: User password is missing in database!");
-      return res.status(500).json({ 
-        success: false, 
-        message: "Internal server error. Please contact support." 
+      return res.status(500).json({
+        success: false,
+        message: "Internal server error. Please contact support."
       });
     }
 
     console.log("Comparing password...");
     console.log("Input password length:", password.length);
     console.log("Stored password hash:", user.password ? user.password.substring(0, 20) + "..." : "MISSING");
-    
+
     const isPasswordCorrect = await bcrypt.compare(password, user.password);
     console.log("Password comparison result:", isPasswordCorrect);
-    
+
     if (!isPasswordCorrect) {
       console.log("❌ Password mismatch!");
       console.log("This might be due to:");
@@ -120,7 +142,7 @@ const loginUser = async (req, res) => {
       await userModel.findByIdAndUpdate(user._id, { sessionIdHash: sha256Hex(jti) });
 
       const token = createToken({ id: user._id, role: user.role || "user", jti, tv });
-      
+
       // User from findByEmail is already decrypted, but we need to ensure password is removed
       // and return a clean user object
       const userResponse = {
@@ -146,6 +168,7 @@ const loginUser = async (req, res) => {
       // Secure session cookies (httpOnly + expiry)
       res.setHeader("Cache-Control", "no-store");
       setAuthCookies(req, res, token);
+      await recordLoginResult(req, { success: true, eventEmail: normalizedEmail });
       res.status(200).json({ success: true, token, user: userResponse });
     } else {
       // Log failed login attempt
@@ -157,6 +180,7 @@ const loginUser = async (req, res) => {
         'FAILURE'
       );
 
+      await recordLoginResult(req, { success: false, eventEmail: normalizedEmail });
       res
         .status(400)
         .json({ success: false, message: "Invalid email or password" });
@@ -185,11 +209,9 @@ const registerUser = async (req, res) => {
     if (!validator.isEmail(email)) {
       return res.status(400).json({ success: false, message: "Invalid email" });
     }
-    if (password.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 8 characters",
-      });
+    const complexity = validatePasswordComplexity(password);
+    if (!complexity.ok) {
+      return res.status(400).json({ success: false, message: complexity.message });
     }
 
     // INFO: Hashing user password
@@ -204,10 +226,14 @@ const registerUser = async (req, res) => {
     console.log("Password hash created:", hashedPassword.substring(0, 20) + "...");
 
     // INFO: Create new user
+    const now = new Date();
     const newUser = new userModel({
       name,
       email: normalizedEmail, // Use normalized email
       password: hashedPassword,
+      passwordChangedAt: now,
+      passwordExpiresAt: computePasswordExpiryDate(now),
+      passwordHistory: [{ hash: hashedPassword, changedAt: now }],
     });
 
     // INFO: Save user to database
@@ -236,7 +262,7 @@ const registerUser = async (req, res) => {
 
     // Get user with decrypted fields using findByEmail (which handles decryption)
     const userResponse = await userModel.findByEmail(email);
-    
+
     // Create clean user object without password
     const cleanUser = userResponse ? {
       _id: userResponse._id,
@@ -288,7 +314,7 @@ const loginAdmin = async (req, res) => {
 
     // Check database first
     let adminSettings = await adminSettingsModel.findOne({ email });
-    
+
     // If no admin settings in DB, check environment variables and create DB entry
     if (!adminSettings) {
       console.log("No admin settings in DB, checking environment variables");
@@ -296,7 +322,7 @@ const loginAdmin = async (req, res) => {
       const envPassword = process.env.ADMIN_PASSWORD?.trim();
       const inputEmail = email?.trim();
       const inputPassword = password?.trim();
-      
+
       if (
         envEmail &&
         envPassword &&
@@ -305,22 +331,30 @@ const loginAdmin = async (req, res) => {
       ) {
         console.log("Environment variables match, creating DB entry");
         // Create admin settings in database with hashed password
+        const complexity = validatePasswordComplexity(inputPassword);
+        if (!complexity.ok) {
+          return res.status(400).json({ success: false, message: complexity.message });
+        }
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(inputPassword, salt);
-        
+
+        const now = new Date();
         adminSettings = new adminSettingsModel({
           email: envEmail,
           password: hashedPassword,
+          passwordChangedAt: now,
+          passwordExpiresAt: computePasswordExpiryDate(now),
+          passwordHistory: [{ hash: hashedPassword, changedAt: now }],
         });
         await adminSettings.save();
-        
+
         const jti = randomToken(16);
         const tv = typeof adminSettings.tokenVersion === "number" ? adminSettings.tokenVersion : 0;
         adminSettings.sessionIdHash = sha256Hex(jti);
         await adminSettings.save();
 
         const token = createToken({ email: envEmail, role: "admin", jti, tv });
-        
+
         // Log admin login
         await logAuthEvent(
           'ADMIN_LOGIN_SUCCESS',
@@ -329,13 +363,14 @@ const loginAdmin = async (req, res) => {
           { email: envEmail, role: 'admin' },
           'SUCCESS'
         );
-        
+
         res.setHeader("Cache-Control", "no-store");
         setAuthCookies(req, res, token);
+        await recordLoginResult(req, { success: true, eventEmail: envEmail });
         return res.status(200).json({ success: true, token });
       } else {
         console.log("Environment variables don't match");
-        
+
         // Log failed admin login
         await logAuthEvent(
           'ADMIN_LOGIN_FAILED',
@@ -344,15 +379,28 @@ const loginAdmin = async (req, res) => {
           null,
           'FAILURE'
         );
-        
+        await recordLoginResult(req, { success: false, eventEmail: email });
         return res.status(400).json({ success: false, message: "Invalid email or password" });
       }
+    }
+
+    // Password expiry policy (admin)
+    if (adminSettings.passwordExpiresAt && adminSettings.passwordExpiresAt instanceof Date && adminSettings.passwordExpiresAt < new Date()) {
+      await logAuthEvent(
+        "ADMIN_PASSWORD_EXPIRED",
+        `Admin password expired: ${email}`,
+        req,
+        { email },
+        "FAILURE"
+      );
+      await recordLoginResult(req, { success: false, eventEmail: email });
+      return res.status(403).json({ success: false, message: "Password expired. Please change/reset admin password." });
     }
 
     // Verify password from database
     console.log("Admin settings found in DB, verifying password");
     const isPasswordCorrect = await bcrypt.compare(password, adminSettings.password);
-    
+
     if (isPasswordCorrect) {
       const jti = randomToken(16);
       const tv = typeof adminSettings.tokenVersion === "number" ? adminSettings.tokenVersion : 0;
@@ -360,7 +408,7 @@ const loginAdmin = async (req, res) => {
       await adminSettings.save();
 
       const token = createToken({ email: adminSettings.email, role: "admin", jti, tv });
-      
+
       // Log successful admin login
       await logAuthEvent(
         'ADMIN_LOGIN_SUCCESS',
@@ -369,13 +417,14 @@ const loginAdmin = async (req, res) => {
         { email: adminSettings.email, role: 'admin' },
         'SUCCESS'
       );
-      
+
       res.setHeader("Cache-Control", "no-store");
       setAuthCookies(req, res, token);
+      await recordLoginResult(req, { success: true, eventEmail: adminSettings.email });
       res.status(200).json({ success: true, token });
     } else {
       console.log("Password verification failed");
-      
+
       // Log failed admin login
       await logAuthEvent(
         'ADMIN_LOGIN_FAILED',
@@ -384,7 +433,8 @@ const loginAdmin = async (req, res) => {
         null,
         'FAILURE'
       );
-      
+
+      await recordLoginResult(req, { success: false, eventEmail: adminSettings.email });
       res.status(400).json({ success: false, message: "Invalid email or password" });
     }
   } catch (error) {
@@ -401,9 +451,9 @@ const getProfile = async (req, res) => {
 
     // Users can only view their own profile, unless they're admin
     if (id !== userId && userRole !== 'admin') {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied. You can only view your own profile." 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only view your own profile."
       });
     }
 
@@ -434,9 +484,9 @@ const updateProfile = async (req, res) => {
 
     // Users can only update their own profile, unless they're admin
     if (id !== userId && userRole !== 'admin') {
-      return res.status(403).json({ 
-        success: false, 
-        message: "Access denied. You can only update your own profile." 
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. You can only update your own profile."
       });
     }
 
@@ -476,10 +526,10 @@ const updateProfile = async (req, res) => {
       'SUCCESS'
     );
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: "Profile updated successfully",
-      user: updatedUser 
+      user: updatedUser
     });
   } catch (error) {
     console.log("Error while updating profile: ", error);
@@ -503,9 +553,9 @@ const resetAdminPassword = async (req, res) => {
   try {
     // Delete all admin settings to reset
     await adminSettingsModel.deleteMany({});
-    res.status(200).json({ 
-      success: true, 
-      message: "Admin settings reset. You can now login with environment variables." 
+    res.status(200).json({
+      success: true,
+      message: "Admin settings reset. You can now login with environment variables."
     });
   } catch (error) {
     console.log("Error while resetting admin password: ", error);
@@ -522,11 +572,9 @@ const changeAdminPassword = async (req, res) => {
       return res.status(400).json({ success: false, message: "All fields are required" });
     }
 
-    if (newPassword.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 8 characters",
-      });
+    const complexity = validatePasswordComplexity(newPassword);
+    if (!complexity.ok) {
+      return res.status(400).json({ success: false, message: complexity.message });
     }
 
     if (newPassword !== confirmPassword) {
@@ -538,47 +586,60 @@ const changeAdminPassword = async (req, res) => {
 
     // Get admin email from request or environment variable
     const adminEmail = email || process.env.ADMIN_EMAIL;
-    
+
     if (!adminEmail) {
       return res.status(400).json({ success: false, message: "Admin email not found" });
     }
-    
+
     // Find admin settings
     let adminSettings = await adminSettingsModel.findOne({ email: adminEmail });
-    
+
     // If no admin settings in DB, check environment variables
     if (!adminSettings) {
       if (currentPassword !== process.env.ADMIN_PASSWORD) {
         return res.status(400).json({ success: false, message: "Current password is incorrect" });
       }
-      
+
       // Create admin settings with new password
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(newPassword, salt);
-      
+
+      const now = new Date();
       adminSettings = new adminSettingsModel({
         email: adminEmail,
         password: hashedPassword,
+        passwordChangedAt: now,
+        passwordExpiresAt: computePasswordExpiryDate(now),
+        passwordHistory: [{ hash: hashedPassword, changedAt: now }],
       });
       adminSettings.tokenVersion = (adminSettings.tokenVersion || 0) + 1;
       adminSettings.sessionIdHash = null;
       await adminSettings.save();
-      
+
       return res.status(200).json({ success: true, message: "Password changed successfully" });
     }
 
     // Verify current password
     const isPasswordCorrect = await bcrypt.compare(currentPassword, adminSettings.password);
-    
+
     if (!isPasswordCorrect) {
       return res.status(400).json({ success: false, message: "Current password is incorrect" });
+    }
+
+    const reused = await isPasswordReused(newPassword, adminSettings.passwordHistory, adminSettings.password);
+    if (reused) {
+      return res.status(400).json({ success: false, message: "You cannot reuse a recent password." });
     }
 
     // Update password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
-    
+
     adminSettings.password = hashedPassword;
+    const now = new Date();
+    adminSettings.passwordChangedAt = now;
+    adminSettings.passwordExpiresAt = computePasswordExpiryDate(now);
+    adminSettings.passwordHistory = [...(adminSettings.passwordHistory || []), { hash: hashedPassword, changedAt: now }].slice(-5);
     adminSettings.tokenVersion = (adminSettings.tokenVersion || 0) + 1;
     adminSettings.sessionIdHash = null;
     await adminSettings.save();
@@ -603,9 +664,9 @@ const forgotPassword = async (req, res) => {
     const user = await userModel.findByEmail(email);
     if (!user) {
       // Don't reveal if user exists for security
-      return res.status(200).json({ 
-        success: true, 
-        message: "If an account exists with this email, a password reset token has been generated." 
+      return res.status(200).json({
+        success: true,
+        message: "If an account exists with this email, a password reset token has been generated."
       });
     }
 
@@ -631,8 +692,8 @@ const forgotPassword = async (req, res) => {
       'SUCCESS'
     );
 
-    res.status(200).json({ 
-      success: true, 
+    res.status(200).json({
+      success: true,
       message: "Password reset token generated. Check your email (or console for demo).",
       resetToken: resetToken // Remove this in production - only for demo
     });
@@ -648,26 +709,24 @@ const resetPassword = async (req, res) => {
     const { email, resetToken, newPassword } = req.body;
 
     if (!email || !resetToken || !newPassword) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email, reset token, and new password are required" 
+      return res.status(400).json({
+        success: false,
+        message: "Email, reset token, and new password are required"
       });
     }
 
-    if (newPassword.length < 8) {
-      return res.status(400).json({
-        success: false,
-        message: "Password must be at least 8 characters",
-      });
+    const complexity = validatePasswordComplexity(newPassword);
+    if (!complexity.ok) {
+      return res.status(400).json({ success: false, message: complexity.message });
     }
 
     // IMPORTANT: email is stored encrypted; use encryption-aware lookup
     const user = await userModel.findByEmail(email);
 
     if (!user) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid or expired reset token" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid or expired reset token"
       });
     }
     if (user.resetPasswordToken !== resetToken || !user.resetPasswordExpires || user.resetPasswordExpires <= new Date()) {
@@ -677,12 +736,21 @@ const resetPassword = async (req, res) => {
       });
     }
 
+    const reused = await isPasswordReused(newPassword, user.passwordHistory, user.password);
+    if (reused) {
+      return res.status(400).json({ success: false, message: "You cannot reuse a recent password." });
+    }
+
     // Hash new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
 
     // Update password and clear reset token
     user.password = hashedPassword;
+    const now = new Date();
+    user.passwordChangedAt = now;
+    user.passwordExpiresAt = computePasswordExpiryDate(now);
+    user.passwordHistory = [...(user.passwordHistory || []), { hash: hashedPassword, changedAt: now }].slice(-5);
     user.resetPasswordToken = null;
     user.resetPasswordExpires = null;
     // Invalidate active sessions after password reset
@@ -699,9 +767,9 @@ const resetPassword = async (req, res) => {
       'SUCCESS'
     );
 
-    res.status(200).json({ 
-      success: true, 
-      message: "Password reset successfully" 
+    res.status(200).json({
+      success: true,
+      message: "Password reset successfully"
     });
   } catch (error) {
     console.log("Error in reset password: ", error);

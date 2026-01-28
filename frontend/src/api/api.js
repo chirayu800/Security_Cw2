@@ -19,8 +19,14 @@ const ApiWithFormData = axios.create({
 
 const getCookie = (name) => {
   if (typeof document === "undefined") return null;
-  const m = document.cookie.match(new RegExp(`(?:^|; )${name.replace(/[-[\\]{}()*+?.,\\\\^$|#\\s]/g, '\\\\$&')}=([^;]*)`));
-  return m ? decodeURIComponent(m[1]) : null;
+  const cookies = document.cookie.split(";").map((c) => c.trim()).filter(Boolean);
+  for (const c of cookies) {
+    const eq = c.indexOf("=");
+    if (eq === -1) continue;
+    const k = c.slice(0, eq).trim();
+    if (k === name) return decodeURIComponent(c.slice(eq + 1));
+  }
+  return null;
 };
 
 const attachSecurityHeaders = (config) => {

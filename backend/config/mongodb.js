@@ -28,6 +28,12 @@ const connectDB = async () => {
 
     // MongoDB connection options (removed deprecated useNewUrlParser and useUnifiedTopology)
     const connectionOptions = {};
+
+    // IMPORTANT: If your URI does not include a db name (e.g. ends with mongodb.net/),
+    // MongoDB uses the default database "test".
+    // Force a predictable db name via env (recommended) or fallback.
+    const configuredDbName = process.env.MONGO_DB_NAME || "trendify";
+    connectionOptions.dbName = configuredDbName;
     
     // Enable MongoDB encryption at rest (if using MongoDB Atlas with encryption)
     // For local MongoDB, ensure TLS/SSL is enabled in connection string
@@ -42,6 +48,8 @@ const connectDB = async () => {
     // Connection event handlers
     mongoose.connection.on("connected", () => {
       console.log("✅ MongoDB connected successfully!");
+      console.log(`🗄️  Database: ${mongoose.connection.name || configuredDbName}`);
+      console.log(`🧭 Host: ${mongoose.connection.host || "unknown"}`);
     });
 
     mongoose.connection.on("error", (err) => {

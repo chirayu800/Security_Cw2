@@ -8,11 +8,11 @@ import crypto from 'crypto';
 
 // Encryption algorithm
 const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 16; // Initialization Vector length
-const SALT_LENGTH = 64; // Salt length for key derivation
-const TAG_LENGTH = 16; // Authentication tag length
-const KEY_LENGTH = 32; // Key length for AES-256
-const ITERATIONS = 100000; // PBKDF2 iterations
+const IV_LENGTH = 16; 
+const SALT_LENGTH = 64; 
+const TAG_LENGTH = 16; 
+const KEY_LENGTH = 32; 
+const ITERATIONS = 100000; 
 
 /**
  * Get encryption key from environment variable

@@ -75,3 +75,30 @@ This document summarizes **what is implemented in this project** and **where it 
   - Routes: `backend/routes/auditLogRoute.js`
   - Controller: `backend/controllers/auditLogController.js`
 
+## 6) Password security (complexity, reuse, expiry)
+
+- **Password complexity enforced on backend**
+  - Rules: upper/lower/digit/symbol + length
+  - Code: `backend/utils/passwordPolicy.js` + `backend/controllers/userController.js`
+
+- **Password reuse prevention**
+  - Blocks reuse of last N passwords (default N=5)
+  - User fields: `passwordHistory`
+  - Admin fields: `passwordHistory`
+
+- **Password expiry policy**
+  - Default expiry: 90 days
+  - Fields: `passwordChangedAt`, `passwordExpiresAt`
+
+## 7) Brute-force prevention (rate limiting + lockout)
+
+- In-memory protection (per IP + email + scope)
+  - Config via env:
+    - `MAX_LOGIN_ATTEMPTS` (default 5)
+    - `LOGIN_WINDOW_MS` (default 15 minutes)
+    - `LOGIN_LOCKOUT_MS` (default 15 minutes)
+  - Code: `backend/middleware/bruteForceProtection.js`
+  - Applied to:
+    - `POST /api/user/login`
+    - `POST /api/user/admin`
+

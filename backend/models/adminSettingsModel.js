@@ -11,6 +11,23 @@ const adminSettingsSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    passwordHistory: {
+      type: [
+        {
+          hash: { type: String, required: true },
+          changedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    passwordChangedAt: {
+      type: Date,
+      default: null,
+    },
+    passwordExpiresAt: {
+      type: Date,
+      default: null,
+    },
     // Secure session controls
     tokenVersion: {
       type: Number,
