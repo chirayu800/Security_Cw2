@@ -1,6 +1,6 @@
 /**
  * Audit Log Controller
- * Handles viewing and managing audit logs (Admin only)
+ * Handles viewing and managing audit logs (Admin only).
  */
 
 import auditLogModel from "../models/auditLogModel.js";
