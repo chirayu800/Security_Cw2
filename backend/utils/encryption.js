@@ -6,6 +6,8 @@
 
 import crypto from 'crypto';
 
+// implement encryption utility
+
 // Encryption algorithm
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
