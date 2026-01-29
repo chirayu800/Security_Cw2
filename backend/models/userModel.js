@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import crypto from "crypto";
 import { encrypt, decrypt } from "../utils/encryption.js";
 
+// user model 
+
 const userSchema = new mongoose.Schema(
   {
     name: {
