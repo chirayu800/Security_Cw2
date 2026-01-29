@@ -3,6 +3,8 @@
  * Handles viewing and managing audit logs (Admin only).
  */
 
+// import necessary modules and models
+
 import auditLogModel from "../models/auditLogModel.js";
 
 /**
