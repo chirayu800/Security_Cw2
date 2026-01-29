@@ -3,6 +3,8 @@ import { logAuthEvent } from "../utils/auditLogger.js";
 // Simple in-memory brute-force protection (per-process).
 // For production multi-instance deployments, store this in Redis.
 
+// burte-force protection 
+
 const MAX_ATTEMPTS = Number(process.env.MAX_LOGIN_ATTEMPTS || 5);
 const WINDOW_MS = Number(process.env.LOGIN_WINDOW_MS || 15 * 60 * 1000); 
 const LOCKOUT_MS = Number(process.env.LOGIN_LOCKOUT_MS || 15 * 60 * 1000); 
